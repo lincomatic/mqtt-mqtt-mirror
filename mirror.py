@@ -21,9 +21,6 @@ protocol_map = {
     "v5": 5,
     "v311": 4,
     "v31": 3,
-    "5": 5,
-    "3.1.1": 4,
-    "3.1": 3,
 }
 
 def load_config():
@@ -72,7 +69,7 @@ def load_config():
         remote_retry_interval = remote.getint("retry_interval", fallback=15)
         remote_keepalive = remote.getint("keepalive", fallback=60)
 
-        remote_protocol_str = remote.get("protocol", "v311").lower()
+        remote_protocol_str = remote.get("protocol", fallback="v311").lower()
         remote_protocol = protocol_map.get(remote_protocol_str, 4)
         
         remote_topics = [(topic.strip(), remote_qos) for topic in remote.get("topics", "").split(",") if topic.strip()]
@@ -171,7 +168,7 @@ async def mirror_remote_broker(remote_cfg, local_client):
     while True:  # Infinite reconnection loop
         try:
             logger.info(
-                "[%s] Generated client ID: %s, protocol: %s, use_websockets: %s",
+                "[%s] client ID: %s, protocol: %s, use_websockets: %s",
                 remote_name,
                 client_id,
                 remote_cfg['protocol_str'],
@@ -230,7 +227,7 @@ async def mirror_remote_broker(remote_cfg, local_client):
                         else:
                             target_topic = msg_topic
                         
-                        logger.debug("[LOCAL] Publishing to %s", target_topic)
+                        logger.debug("[local] Publishing to %s", target_topic)
                         await local_client.publish(
                             target_topic,
                             message.payload,
@@ -238,7 +235,7 @@ async def mirror_remote_broker(remote_cfg, local_client):
                             retain=message.retain
                         )
                     except Exception as e:  # pylint: disable=broad-except
-                        logger.error("[LOCAL] Publish exception: %s", e)
+                        logger.error("[local] Publish exception: %s", e)
 
         except aiomqtt.MqttError as e:
             logger.error(
@@ -322,7 +319,7 @@ async def main():
     local_client_id = f"mqttmirror{random.randint(1000000, 9999999)}"
     while True:
         try:
-            logger.info("[LOCAL] Trying to connect to Mosquitto at %s:%s", LOCAL_HOST, LOCAL_PORT)
+            logger.info("[local] Trying to connect to broker at %s:%s as %s", LOCAL_HOST, LOCAL_PORT,local_client_id)
             async with aiomqtt.Client(
                 hostname=LOCAL_HOST,
                 port=LOCAL_PORT,
@@ -334,24 +331,24 @@ async def main():
                 transport="websockets" if LOCAL_USE_WEBSOCKETS else "tcp",
                 tls_params=local_tls_params,
             ) as local_client:
-                logger.info("[LOCAL] Connected to Mosquitto at %s:%s", LOCAL_HOST, LOCAL_PORT)
+                logger.info("[local] Connected to broker at %s:%s", LOCAL_HOST, LOCAL_PORT)
                 
                 # Create concurrent tasks for all enabled remote brokers
-                logger.debug("[LOCAL] Creating tasks for %d remote(s)", len(REMOTES))
+                logger.debug("[local] Creating tasks for %d remote(s)", len(REMOTES))
                 remote_tasks = [
                     asyncio.create_task(mirror_remote_broker(remote, local_client))
                     for remote in REMOTES
                 ]
-                logger.debug("[LOCAL] Created %d task(s), starting to gather", len(remote_tasks))
+                logger.debug("[local] Created %d task(s), starting to gather", len(remote_tasks))
                 
                 # Run all remote mirror tasks concurrently
                 # If any task fails, we'll catch the exception and reconnect
                 results = await asyncio.gather(*remote_tasks, return_exceptions=True)
-                logger.debug("[LOCAL] Gather completed with results: %s", results)
+                logger.debug("[local] Gather completed with results: %s", results)
                 
         except aiomqtt.MqttError as e:
             logger.error(
-                "[LOCAL] MQTT error: %s. Retrying in %ds...",
+                "[local] MQTT error: %s. Retrying in %ds...",
                 e,
                 LOCAL_RETRY_INTERVAL,
                 exc_info=True
@@ -359,7 +356,7 @@ async def main():
             await asyncio.sleep(LOCAL_RETRY_INTERVAL)
         except Exception as e:  # pylint: disable=broad-except
             logger.error(
-                "[LOCAL] Unexpected error: %s. Retrying in %ds...",
+                "[local] Unexpected error: %s. Retrying in %ds...",
                 e,
                 LOCAL_RETRY_INTERVAL,
                 exc_info=True

@@ -17,7 +17,7 @@ enable=true
 host = mqtt-us-v1.letsmesh.net
 # Remote MQTT broker port (443 for websockets, 8883/1883 for TCP)
 port = 443
-# MQTT protocol version (valid values: v5, v311, v31, 5, 3.1.1, 3.1; default: v5)
+# MQTT protocol version (valid values: v5, v311, v31; default: v311)
 protocol = v5
 # Use WebSocket transport instead of TCP (valid values: true, false)
 use_websockets = true
