@@ -16,6 +16,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 logger.info("Script starting, loading configuration...")
 
+
+class LocalPublishError(Exception):
+    """Raised when publishing to the local broker fails and a reconnect is required."""
+
 # Map protocol string to aiomqtt protocol version
 protocol_map = {
     "v5": 5,
@@ -168,7 +172,7 @@ async def mirror_remote_broker(remote_cfg, local_client):
     while True:  # Infinite reconnection loop
         try:
             logger.info(
-                "[%s] client ID: %s, protocol: %s, use_websockets: %s",
+                "[%s] Generated client ID: %s, protocol: %s, use_websockets: %s",
                 remote_name,
                 client_id,
                 remote_cfg['protocol_str'],
@@ -236,6 +240,11 @@ async def mirror_remote_broker(remote_cfg, local_client):
                         )
                     except Exception as e:  # pylint: disable=broad-except
                         logger.error("[local] Publish exception: %s", e)
+                        raise LocalPublishError("publish to local broker failed") from e
+
+        except LocalPublishError:
+            # Let main recreate the local broker connection and remote tasks.
+            raise
 
         except aiomqtt.MqttError as e:
             logger.error(
@@ -343,8 +352,19 @@ async def main():
                 
                 # Run all remote mirror tasks concurrently
                 # If any task fails, we'll catch the exception and reconnect
-                results = await asyncio.gather(*remote_tasks, return_exceptions=True)
-                logger.debug("[local] Gather completed with results: %s", results)
+                try:
+                    await asyncio.gather(*remote_tasks)
+                except LocalPublishError:
+                    logger.warning("[local] Publish failed; reconnecting local broker and restarting remote tasks")
+                    for task in remote_tasks:
+                        task.cancel()
+                    await asyncio.gather(*remote_tasks, return_exceptions=True)
+                    raise
+                except Exception:
+                    for task in remote_tasks:
+                        task.cancel()
+                    await asyncio.gather(*remote_tasks, return_exceptions=True)
+                    raise
                 
         except aiomqtt.MqttError as e:
             logger.error(
@@ -367,10 +387,10 @@ async def main():
 if __name__ == "__main__":
     try:
         # On Windows, aiomqtt requires SelectorEventLoop, not ProactorEventLoop
-        # Import explicitly to avoid linter errors
         if sys.platform.lower() == "win32" or platform.system() == "Windows":
-            from asyncio import set_event_loop_policy, WindowsSelectorEventLoopPolicy
-            set_event_loop_policy(WindowsSelectorEventLoopPolicy())
+            selector_policy = getattr(asyncio, "WindowsSelectorEventLoopPolicy", None)
+            if selector_policy is not None:
+                asyncio.set_event_loop_policy(selector_policy())
         asyncio.run(main())
     except Exception as e:  # pylint: disable=broad-except
         logger.error("Fatal error in main: %s", e, exc_info=True)
