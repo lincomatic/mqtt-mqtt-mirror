@@ -33,6 +33,8 @@ session_expiry = 60
 retry_interval = 15
 # MQTT keepalive timeout (unit: seconds)
 keepalive = 60
+# Connection timeout for MQTT client (unit: seconds; default: 30)
+connection_timeout = 30
 # Username for remote broker authentication
 user = remote1_user
 # Password for remote broker authentication
@@ -63,6 +65,8 @@ session_expiry = 60
 retry_interval = 15
 # MQTT keepalive timeout (unit: seconds)
 keepalive = 60
+# Connection timeout for MQTT client (unit: seconds; default: 30)
+connection_timeout = 30
 # Username for remote broker authentication
 user = remote2_user
 # Password for remote broker authentication
@@ -87,6 +91,8 @@ tls_insecure=true
 keepalive = 60
 # Wait time before retrying failed local broker connections (unit: seconds)
 retry_interval = 15
+# Connection timeout for MQTT client (unit: seconds; default: 30)
+connection_timeout = 30
 # Username for local broker authentication
 user = local_user
 # Password for local broker authentication

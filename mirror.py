@@ -72,6 +72,7 @@ def load_config():
         remote_session_expiry = remote.getint("session_expiry", fallback=0)
         remote_retry_interval = remote.getint("retry_interval", fallback=15)
         remote_keepalive = remote.getint("keepalive", fallback=60)
+        remote_connection_timeout = remote.getint("connection_timeout", fallback=30)
 
         remote_protocol_str = remote.get("protocol", fallback="v311").lower()
         remote_protocol = protocol_map.get(remote_protocol_str, 4)
@@ -95,6 +96,7 @@ def load_config():
                 "session_expiry": remote_session_expiry,
                 "retry_interval": remote_retry_interval,
                 "keepalive": remote_keepalive,
+                "connection_timeout": remote_connection_timeout,
                 "protocol": remote_protocol,
                 "protocol_str": remote_protocol_str,
                 "topics": remote_topics,
@@ -128,6 +130,7 @@ def load_config():
         "LOCAL_PASS": local.get("pass"),
         "LOCAL_KEEPALIVE": local.getint("keepalive", fallback=60),
         "LOCAL_RETRY_INTERVAL": local.getint("retry_interval", fallback=15),
+        "LOCAL_CONNECTION_TIMEOUT": local.getint("connection_timeout", fallback=30),
         "LOCAL_PROTOCOL_STR": local.get("protocol", "v311").lower()
     }
 
@@ -148,6 +151,7 @@ try:
     LOCAL_PASS = settings["LOCAL_PASS"]
     LOCAL_KEEPALIVE = settings["LOCAL_KEEPALIVE"]
     LOCAL_RETRY_INTERVAL = settings["LOCAL_RETRY_INTERVAL"]
+    LOCAL_CONNECTION_TIMEOUT = settings["LOCAL_CONNECTION_TIMEOUT"]
     LOCAL_PROTOCOL_STR = settings["LOCAL_PROTOCOL_STR"]
     logger.info("Loaded %d remote broker config(s)", len(REMOTES))
     resolved_log_level = getattr(logging, str(GLOBAL_LOG_LEVEL).upper(), logging.INFO)
@@ -202,6 +206,7 @@ async def mirror_remote_broker(remote_cfg, local_client):
                 clean_session=(remote_cfg["session_expiry"] == 0),
                 transport="websockets" if remote_cfg["use_websockets"] else "tcp",
                 tls_params=tls_params,
+                timeout=remote_cfg["connection_timeout"],
             ) as client:
                 logger.info("[%s] Connected to %s:%s", remote_name, remote_cfg['host'], remote_cfg['port'])
                 
@@ -339,6 +344,7 @@ async def main():
                 keepalive=LOCAL_KEEPALIVE,
                 transport="websockets" if LOCAL_USE_WEBSOCKETS else "tcp",
                 tls_params=local_tls_params,
+                timeout=LOCAL_CONNECTION_TIMEOUT,
             ) as local_client:
                 logger.info("[local] Connected to broker at %s:%s", LOCAL_HOST, LOCAL_PORT)
                 
