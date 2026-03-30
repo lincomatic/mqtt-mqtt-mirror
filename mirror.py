@@ -6,6 +6,7 @@ import platform
 import random
 import ssl
 import sys
+import hashlib
 import aiomqtt
 
 
@@ -19,6 +20,32 @@ logger.info("Script starting, loading configuration...")
 
 class LocalPublishError(Exception):
     """Raised when publishing to the local broker fails and a reconnect is required."""
+
+
+class DedupCache:
+    """TTL-based deduplication cache shared across remote mirror tasks."""
+
+    def __init__(self):
+        self._entries = {}
+        self._lock = asyncio.Lock()
+
+    async def seen_recently(self, dedupe_key, ttl_seconds):
+        """Return True if key is seen within TTL; otherwise store key and return False."""
+        now = asyncio.get_running_loop().time()
+        async with self._lock:
+            # Opportunistic cleanup keeps the cache bounded by TTL.
+            expired_keys = [
+                key for key, expire_at in self._entries.items() if expire_at <= now
+            ]
+            for key in expired_keys:
+                del self._entries[key]
+
+            expire_at = self._entries.get(dedupe_key)
+            if expire_at is not None and expire_at > now:
+                return True
+
+            self._entries[dedupe_key] = now + ttl_seconds
+            return False
 
 # Map protocol string to aiomqtt protocol version
 protocol_map = {
@@ -73,6 +100,7 @@ def load_config():
         remote_retry_interval = remote.getint("retry_interval", fallback=15)
         remote_keepalive = remote.getint("keepalive", fallback=60)
         remote_connection_timeout = remote.getint("connection_timeout", fallback=30)
+        remote_dedupe = remote.getboolean("dedupe", fallback=False)
 
         remote_protocol_str = remote.get("protocol", fallback="v311").lower()
         remote_protocol = protocol_map.get(remote_protocol_str, 4)
@@ -97,6 +125,7 @@ def load_config():
                 "retry_interval": remote_retry_interval,
                 "keepalive": remote_keepalive,
                 "connection_timeout": remote_connection_timeout,
+                "dedupe": remote_dedupe,
                 "protocol": remote_protocol,
                 "protocol_str": remote_protocol_str,
                 "topics": remote_topics,
@@ -115,6 +144,11 @@ def load_config():
     if not local.get("port"):
         raise KeyError("[local] Required parameter 'port' is missing")
     local_port = local.getint("port")
+    local_dedupe_ttl = local.getint("dedupe_ttl", fallback=60)
+    if local_dedupe_ttl <= 0:
+        raise ValueError(
+            f"[local] Invalid dedupe_ttl={local_dedupe_ttl}, must be > 0"
+        )
 
     return {
         "REMOTES": remotes,
@@ -128,6 +162,7 @@ def load_config():
         "LOCAL_USE_WEBSOCKETS": local.getboolean("use_websockets", fallback=False),
         "LOCAL_USER": local.get("user"),
         "LOCAL_PASS": local.get("pass"),
+        "LOCAL_DEDUPE_TTL": local_dedupe_ttl,
         "LOCAL_KEEPALIVE": local.getint("keepalive", fallback=60),
         "LOCAL_RETRY_INTERVAL": local.getint("retry_interval", fallback=15),
         "LOCAL_CONNECTION_TIMEOUT": local.getint("connection_timeout", fallback=30),
@@ -149,6 +184,7 @@ try:
     LOCAL_USE_WEBSOCKETS = settings["LOCAL_USE_WEBSOCKETS"]
     LOCAL_USER = settings["LOCAL_USER"]
     LOCAL_PASS = settings["LOCAL_PASS"]
+    LOCAL_DEDUPE_TTL = settings["LOCAL_DEDUPE_TTL"]
     LOCAL_KEEPALIVE = settings["LOCAL_KEEPALIVE"]
     LOCAL_RETRY_INTERVAL = settings["LOCAL_RETRY_INTERVAL"]
     LOCAL_CONNECTION_TIMEOUT = settings["LOCAL_CONNECTION_TIMEOUT"]
@@ -163,7 +199,12 @@ except Exception as e:
     raise
 
 
-async def mirror_remote_broker(remote_cfg, local_client):
+def build_dedupe_key(topic, payload, qos, retain):
+    payload_digest = hashlib.sha256(payload).hexdigest()
+    return f"{topic}|{int(qos)}|{int(retain)}|{payload_digest}"
+
+
+async def mirror_remote_broker(remote_cfg, local_client, dedup_cache=None):
     """Connect to a remote broker and mirror its messages to the local broker with automatic reconnection."""
     remote_name = remote_cfg["name"]
     logger.debug("[%s] mirror_remote_broker task started", remote_name)
@@ -235,6 +276,26 @@ async def mirror_remote_broker(remote_cfg, local_client):
                             target_topic = f"{test_prefix}/{msg_topic}" if test_prefix else msg_topic
                         else:
                             target_topic = msg_topic
+
+                        if remote_cfg["dedupe"] and dedup_cache is not None:
+                            dedupe_key = build_dedupe_key(
+                                target_topic,
+                                message.payload,
+                                message.qos,
+                                message.retain,
+                            )
+                            is_duplicate = await dedup_cache.seen_recently(
+                                dedupe_key,
+                                LOCAL_DEDUPE_TTL,
+                            )
+                            if is_duplicate:
+                                logger.debug(
+                                    "[%s] Dropping duplicate packet on %s within dedupe_ttl=%ds",
+                                    remote_name,
+                                    target_topic,
+                                    LOCAL_DEDUPE_TTL,
+                                )
+                                continue
                         
                         logger.debug("[local] Publishing to %s", target_topic)
                         await local_client.publish(
@@ -287,21 +348,22 @@ async def main():
         "[CONFIG] global.log_level=%s test=%s test_topic=%s",
         str(GLOBAL_LOG_LEVEL).upper(),
         str(GLOBAL_TEST).lower(),
-        GLOBAL_TEST_TOPIC
+        GLOBAL_TEST_TOPIC,
     )
     logger.info(
-        "[local] protocol=%s use_tls=%s tls_insecure=%s use_websockets=%s keepalive=%d retry_interval=%d",
+        "[local] protocol=%s use_tls=%s tls_insecure=%s use_websockets=%s keepalive=%d retry_interval=%d dedupe_ttl=%ds",
         LOCAL_PROTOCOL_STR,
         str(LOCAL_USE_TLS).lower(),
         str(LOCAL_TLS_INSECURE).lower(),
         str(LOCAL_USE_WEBSOCKETS).lower(),
         LOCAL_KEEPALIVE,
-        LOCAL_RETRY_INTERVAL
+        LOCAL_RETRY_INTERVAL,
+        LOCAL_DEDUPE_TTL,
     )
     logger.info("[CONFIG] Loaded remote topic subscriptions:")
     for remote in REMOTES:
         logger.info(
-            "[%s] enable=%s protocol=%s use_tls=%s tls_insecure=%s use_websockets=%s session_expiry=%d retry_interval=%d keepalive=%d",
+            "[%s] enable=%s protocol=%s use_tls=%s tls_insecure=%s use_websockets=%s session_expiry=%d retry_interval=%d keepalive=%d dedupe=%s",
             remote['name'],
             str(remote['enabled']).lower(),
             remote['protocol_str'],
@@ -310,7 +372,8 @@ async def main():
             str(remote['use_websockets']).lower(),
             remote['session_expiry'],
             remote['retry_interval'],
-            remote['keepalive']
+            remote['keepalive'],
+            str(remote['dedupe']).lower(),
         )
         if remote["enabled"]:
             logger.info("[%s] Topics:", remote['name'])
@@ -350,8 +413,9 @@ async def main():
                 
                 # Create concurrent tasks for all enabled remote brokers
                 logger.debug("[local] Creating tasks for %d remote(s)", len(REMOTES))
+                dedup_cache = DedupCache()
                 remote_tasks = [
-                    asyncio.create_task(mirror_remote_broker(remote, local_client))
+                    asyncio.create_task(mirror_remote_broker(remote, local_client, dedup_cache))
                     for remote in REMOTES
                 ]
                 logger.debug("[local] Created %d task(s), starting to gather", len(remote_tasks))

@@ -35,6 +35,8 @@ retry_interval = 15
 keepalive = 60
 # Connection timeout for MQTT client (unit: seconds; default: 30)
 connection_timeout = 30
+# Enable packet deduplication for this remote against the shared cross-remote cache (valid values: true, false)
+dedupe = false
 # Username for remote broker authentication
 user = remote1_user
 # Password for remote broker authentication
@@ -67,6 +69,8 @@ retry_interval = 15
 keepalive = 60
 # Connection timeout for MQTT client (unit: seconds; default: 30)
 connection_timeout = 30
+# Enable packet deduplication for this remote against the shared cross-remote cache (valid values: true, false)
+dedupe = false
 # Username for remote broker authentication
 user = remote2_user
 # Password for remote broker authentication
@@ -93,6 +97,8 @@ keepalive = 60
 retry_interval = 15
 # Connection timeout for MQTT client (unit: seconds; default: 30)
 connection_timeout = 30
+# Time-to-live for deduplication buffer entries shared across remotes (unit: seconds; must be > 0)
+dedupe_ttl = 60
 # Username for local broker authentication
 user = local_user
 # Password for local broker authentication
