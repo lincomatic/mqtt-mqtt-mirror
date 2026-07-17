@@ -8,6 +8,7 @@ import ssl
 import sys
 import hashlib
 import aiomqtt
+import gc
 
 
 logging.basicConfig(
@@ -332,6 +333,10 @@ async def mirror_remote_broker(remote_cfg, local_client, dedup_cache=None):
 
 async def main():
     """Main coroutine that manages local broker connection and remote mirror tasks."""
+
+    gc.set_threshold(50000, 10, 10) # Allocations before a GC pass (Default is \
+usually ~700)
+
     logger.debug("[CONFIG] Remotes loaded: %d", len(REMOTES))
     for remote in REMOTES:
         logger.debug(
