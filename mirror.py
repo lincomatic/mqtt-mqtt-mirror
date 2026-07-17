@@ -199,9 +199,9 @@ except Exception as e:
     raise
 
 
-def build_dedupe_key(topic, payload, qos, retain):
+def build_dedupe_key(topic, payload):
     payload_digest = hashlib.sha256(payload).hexdigest()
-    return f"{topic}|{int(qos)}|{int(retain)}|{payload_digest}"
+    return f"{topic}|{payload_digest}"
 
 
 async def mirror_remote_broker(remote_cfg, local_client, dedup_cache=None):
@@ -281,8 +281,6 @@ async def mirror_remote_broker(remote_cfg, local_client, dedup_cache=None):
                             dedupe_key = build_dedupe_key(
                                 target_topic,
                                 message.payload,
-                                message.qos,
-                                message.retain,
                             )
                             is_duplicate = await dedup_cache.seen_recently(
                                 dedupe_key,
